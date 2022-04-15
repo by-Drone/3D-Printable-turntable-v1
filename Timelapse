@@ -1,3 +1,5 @@
+/* Example code to run the LW Lapse 3D printed turntable in Photogrammetry mode, more info available here: https://bit.ly/YoutubeTurntable */
+
 // Include the Arduino Stepper.h library:
 #include <Stepper.h>
 // Define number of steps per rotation:
