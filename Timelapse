@@ -4,7 +4,7 @@
 #include <Stepper.h>
 // Define number of steps per rotation:
 const int stepsPerRevolution = 2048;
-const int photostep = 4 // 22917 steps = one full turntable rotation
+const int photostep = 4 // I suggest from 2 to 10 steps, default value is 4. 22917 steps = one full turntable rotation
 ;int switchState = 0;
 
 
@@ -34,6 +34,6 @@ void loop() {
   delay(1800);                   //exposure delay
   Serial.println("clockwise");
   myStepper.step(photostep);
-  delay(178000);
+  delay(178000);                   // timelapse interval in milliseconds, here its 3 minutes as one must consider the exposure and shutter delays too
   }
   
