@@ -1,39 +1,28 @@
-/* Example code to run the LW Lapse 3D printed turntable in Photogrammetry mode, more info available here: https://bit.ly/YoutubeTurntable */
+/* Example code to run the LW Lapse 3D printed turntable with NEMA bipolar stepper motor in Timelapse mode, more info available here: https://bit.ly/YoutubeTurntable */
 
-// Include the Arduino Stepper.h library:
-#include <Stepper.h>
-// Define number of steps per rotation:
-const int stepsPerRevolution = 2048;
-const int photostep = 4 // I suggest from 2 to 10 steps, default value is 4. 22917 steps = one full turntable rotation
-;int switchState = 0;
+#include <AccelStepper.h>
 
+#define STEP_PIN 2     // Define the step pin connected to the CNC shield
+#define DIR_PIN 5      // Define the direction pin connected to the CNC shield
+#define ENABLE_PIN 8   // Define the enable pin connected to the CNC shield
+#define PULSE_PIN 12   // Define the output pin to trigger for 125ms
 
-// Wiring:
-// Pin 8 to IN1 on the ULN2003 driver
-// Pin 9 to IN2 on the ULN2003 driver
-// Pin 10 to IN3 on the ULN2003 driver
-// Pin 11 to IN4 on the ULN2003 driver
-// Create stepper object called 'myStepper', note the pin order:
-;Stepper myStepper = Stepper(stepsPerRevolution, 8, 10, 9, 11);
-
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 void setup() {
-  // Set the speed to 5 rpm:
-  myStepper.setSpeed(5);
-  pinMode(2, INPUT);
-  pinMode(3, OUTPUT);
-  // Begin Serial communication at a baud rate of 9600:
-  Serial.begin(9600);
+  pinMode(PULSE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW); // Enable the driver (active low)
+  stepper.setMaxSpeed(2000);     // Set the maximum speed (steps per second)
+  stepper.setAcceleration(1000); // Set the acceleration (steps per second per second)
 }
 
 void loop() {
- 
-  digitalWrite(3, HIGH);
-  delay(200);                    //shutter activation
-  digitalWrite(3, LOW);
-  delay(1800);                   //exposure delay
-  Serial.println("clockwise");
-  myStepper.step(photostep);
-  delay(178000);                   // timelapse interval in milliseconds, here its 3 minutes as one must consider the exposure and shutter delays too
-  }
-  
+  digitalWrite(PULSE_PIN, HIGH); // Trigger the output pin HIGH
+  delay(125);                     // Wait for 125ms
+  digitalWrite(PULSE_PIN, LOW);  // Trigger the output pin LOW
+  delay(2875);                   // Pause for exposure
+
+  stepper.move(7);             // Stepper motor steps per interval, one table rotation is 20677 steps
+  stepper.runToPosition();       // Wait for the motor to reach the target position
+  delay(127000);                   // Interval in Milliseconds excluding settling delay and trigger time, total 3 seconds, ie for 2 min interval use 117000
+}
