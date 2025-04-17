@@ -1,0 +1,487 @@
+// New blocking approach for Continuous motion:
+// - Remove continuousRunning, references
+// - When user picks Start, run a while(true) loop until user hits Enter
+// - Then return to continuous menu.
+
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <AccelStepper.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Pins
+#define BUTTON_ENTER 2
+#define BUTTON_UP    6
+#define BUTTON_DOWN  7
+#define BUTTON_LEFT  8
+#define BUTTON_RIGHT 9
+#define OUT_12V      5
+#define CAM1         10
+#define CAM2         11
+#define CAM3         12
+#define STEP_PIN     3
+#define DIR_PIN     4
+
+// Stepper
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
+
+// Menu State
+int menuLevel = 0;
+int selectedItem = 0;
+
+// Timelapse variables
+int intervalMinutes = 1;
+int n_steps = 1;
+unsigned long lastTriggerTime = 0;
+int timelapseCount = 0;
+bool timelapseRunning = false;
+
+// Continuous variables (no more continuousRunning flag)
+int speedPercent = 50; // 5..100
+
+// Home, Timelapse, and Continuous Menus
+const char* homeMenu[]       = {"Timelapse", "Continuous"};
+const char* timelapseMenu[]  = {"Start", "Interval", "Steps/Interval", "Back"};
+// Now: 0=Speed,1=Start,2=Back
+const char* continuousMenu[] = {"Speed", "Start", "Back"};
+
+bool wasPressed(int pin) {
+  static bool lastState[15] = {false};
+  bool pressed = !digitalRead(pin);
+  bool ret = pressed && !lastState[pin];
+  lastState[pin] = pressed;
+  return ret;
+}
+
+//--------------------------------------------------
+void setup() {
+  // Inputs
+  int inputPins[] = {BUTTON_ENTER, BUTTON_UP, BUTTON_DOWN, BUTTON_LEFT, BUTTON_RIGHT};
+  for (int i=0; i<5; i++) {
+    pinMode(inputPins[i], INPUT_PULLUP);
+  }
+
+  // Outputs
+  int outputPins[] = {OUT_12V, CAM1, CAM2, CAM3};
+  for (int i=0; i<4; i++) {
+    pinMode(outputPins[i], OUTPUT);
+    digitalWrite(outputPins[i], LOW);
+  }
+
+  // OLED
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.display();
+
+  // Stepper
+  stepper.setMaxSpeed(1000);
+  stepper.setAcceleration(500);
+}
+
+//--------------------------------------------------
+void loop() {
+  // If timelapse is running:
+  if (timelapseRunning && menuLevel==4) {
+    handleTimelapseRunning();
+  }
+
+  // Basic menu nav
+  if (menuLevel == 0) {
+    // HOME
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>1) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=1;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==0) {
+        // Timelapse
+        menuLevel=1;
+        selectedItem=0;
+      } else {
+        // Continuous
+        menuLevel=10;
+        selectedItem=0;
+      }
+    }
+  }
+  else if (menuLevel==1) {
+    // TIMELAPSE menu
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>3) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=3;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==0) {
+        // Start timelapse
+        timelapseRunning=true;
+        timelapseCount=0;
+        lastTriggerTime=millis();
+        menuLevel=4;
+        selectedItem=0;
+      } else if (selectedItem==1) {
+        // Interval
+        menuLevel=2;
+        selectedItem=0;
+      } else if (selectedItem==2) {
+        // Steps
+        menuLevel=3;
+        selectedItem=0;
+      } else {
+        // back to home
+        menuLevel=0;
+        selectedItem=0;
+      }
+    }
+  }
+  else if (menuLevel==2) {
+    // Timelapse > Interval
+    int menuCount=2; // Value, Back
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>=menuCount) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=menuCount-1;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==1) {
+        menuLevel=1;
+        selectedItem=1;
+      }
+    }
+
+    // if editing value
+    if (selectedItem==0) {
+      if (wasPressed(BUTTON_RIGHT)) {
+        intervalMinutes++;
+        if (intervalMinutes>99) intervalMinutes=99;
+      } else if (wasPressed(BUTTON_LEFT)) {
+        intervalMinutes--;
+        if (intervalMinutes<1) intervalMinutes=1;
+      }
+    }
+  }
+  else if (menuLevel==3) {
+    // Timelapse > Steps
+    int menuCount=2; // Value, Back
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>=menuCount) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=menuCount-1;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==1) {
+        menuLevel=1;
+        selectedItem=2;
+      }
+    }
+
+    // editing steps
+    if (selectedItem==0) {
+      if (wasPressed(BUTTON_RIGHT)||wasPressed(BUTTON_UP)) {
+        if (n_steps<1024) {
+          n_steps*=2;
+          if (n_steps>1024) n_steps=1024;
+        }
+      } else if (wasPressed(BUTTON_LEFT)||wasPressed(BUTTON_DOWN)) {
+        if (n_steps>1) {
+          n_steps/=2;
+          if (n_steps<1) n_steps=1;
+        }
+      }
+    }
+  }
+  else if (menuLevel==10) {
+    // Continuous: 0=Speed,1=Start,2=Back
+    int menuCount=3;
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>=menuCount) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=menuCount-1;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==0) {
+        // Speed sub
+        menuLevel=13;
+        selectedItem=0;
+      } else if (selectedItem==1) {
+        // Start continuous in blocking loop
+        startContinuousMotion();
+        // after user stops, we return here
+      } else {
+        // Back to home
+        menuLevel=0;
+        selectedItem=0;
+      }
+    }
+  }
+  else if (menuLevel==13) {
+    // Speed: 2 items => Value, Back
+    int menuCount=2;
+    if (wasPressed(BUTTON_DOWN)) {
+      selectedItem++;
+      if (selectedItem>=menuCount) selectedItem=0;
+    } else if (wasPressed(BUTTON_UP)) {
+      selectedItem--;
+      if (selectedItem<0) selectedItem=menuCount-1;
+    } else if (wasPressed(BUTTON_ENTER)) {
+      if (selectedItem==1) {
+        // back
+        menuLevel=10;
+        selectedItem=0;
+      }
+    }
+
+    // if editing speed
+    if (selectedItem==0) {
+      if (wasPressed(BUTTON_RIGHT)||wasPressed(BUTTON_UP)) {
+        speedPercent+=5;
+        if (speedPercent>100) speedPercent=100;
+      } else if (wasPressed(BUTTON_LEFT)||wasPressed(BUTTON_DOWN)) {
+        speedPercent-=5;
+        if (speedPercent<5) speedPercent=5;
+      }
+    }
+  }
+
+  // Render
+  display.clearDisplay();
+  drawMenu();
+  display.display();
+}
+
+//--------------------------------------------------
+// Start Continuous Motion (Blocking)
+//--------------------------------------------------
+
+void startContinuousMotion() {
+  // set direction pin low
+  digitalWrite(DIR_PIN, LOW);
+
+  // convert speedPercent into steps/sec
+  float minSpeed = 100.0;
+  float maxSpeed = 1000.0;
+  float scale = (float)(speedPercent - 5)/95.0;
+  if (scale<0) scale=0;
+  float spd = minSpeed + (maxSpeed - minSpeed)*scale;
+  stepper.setSpeed(spd);
+
+  // turn on 12V
+  digitalWrite(OUT_12V, HIGH);
+
+  // show a quick screen with speed, instructions
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.println("Running...");
+  display.setCursor(0,12);
+  display.print("Speed: ");
+  display.print(speedPercent);
+  display.println("%");
+  display.setCursor(0,24);
+  display.println("Press ENTER to stop");
+  display.display();
+  delay(500);
+
+  // run motor in a blocking loop until user hits ENTER
+  while (true) {
+    stepper.runSpeed();
+    if (wasPressed(BUTTON_ENTER)) {
+      // stop
+      digitalWrite(OUT_12V, LOW);
+      // break
+      break;
+    }
+  }
+
+  // after exit, return to continuous menu
+  menuLevel=10;
+  selectedItem=1; // highlight "Start"
+}
+
+//--------------------------------------------------
+// Timelapse Running
+//--------------------------------------------------
+
+void handleTimelapseRunning() {
+  if (wasPressed(BUTTON_ENTER)) {
+    timelapseRunning=false;
+    menuLevel=1;
+    selectedItem=0;
+    return;
+  }
+
+  unsigned long now=millis();
+  unsigned long elapsed=now-lastTriggerTime;
+  unsigned long cycle=(unsigned long)intervalMinutes*60000UL;
+
+  if (elapsed>=cycle) {
+    // 12v on
+    digitalWrite(OUT_12V, HIGH);
+    delay(500);
+
+    // cameras
+    digitalWrite(CAM1, HIGH);
+    digitalWrite(CAM2, HIGH);
+    digitalWrite(CAM3, HIGH);
+    delay(125);
+    digitalWrite(CAM1, LOW);
+    digitalWrite(CAM2, LOW);
+    digitalWrite(CAM3, LOW);
+
+    delay(1000);
+
+    // move motor n_steps
+    stepper.move(n_steps);
+    while (stepper.distanceToGo()!=0) {
+      stepper.run();
+    }
+
+    digitalWrite(OUT_12V, LOW);
+
+    lastTriggerTime=millis();
+    timelapseCount++;
+  }
+}
+
+void drawTimelapseRunning() {
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+
+  unsigned long now=millis();
+  unsigned long elapsed=now-lastTriggerTime;
+  unsigned long cycle=(unsigned long)intervalMinutes*60000UL;
+  unsigned long remaining=(elapsed<cycle)?(cycle-elapsed):0;
+  unsigned long secsLeft=remaining/1000UL;
+  unsigned long mm=secsLeft/60UL;
+  unsigned long ss=secsLeft%60UL;
+
+  display.setCursor(0,0);
+  display.print("Next: ");
+  if (mm<10) display.print("0");
+  display.print(mm);
+  display.print(":");
+  if (ss<10) display.print("0");
+  display.print(ss);
+
+  display.setCursor(0,12);
+  display.print("Total: ");
+  display.print(timelapseCount);
+  display.print(" (");
+  float ratio=timelapseCount/30.0;
+  display.print(ratio,1);
+  display.println(")s");
+
+  // single item stop
+  display.setCursor(0,24);
+  if (selectedItem==0) {
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+  } else {
+    display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+  }
+  display.println("Stop");
+}
+
+//--------------------------------------------------
+void drawMenu() {
+  // if timelapseRunning
+  if (menuLevel==4 && timelapseRunning) {
+    drawTimelapseRunning();
+    return;
+  }
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+
+  // HOME
+  if (menuLevel==0) {
+    display.setCursor(0,0);
+    display.println("HOME");
+    for (int i=0; i<2; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      display.println(homeMenu[i]);
+    }
+  }
+  // TIMELAPSE
+  else if (menuLevel==1) {
+    display.setCursor(0,0);
+    display.println("TIMELAPSE");
+    for (int i=0; i<4; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      display.println(timelapseMenu[i]);
+    }
+  }
+  else if (menuLevel==2) {
+    display.setCursor(0,0);
+    display.println("INTERVAL");
+    for (int i=0; i<2; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      if (i==0) {
+        display.print("Value: ");
+        display.print(intervalMinutes);
+        display.println(" min");
+      } else {
+        display.println("Back");
+      }
+    }
+  }
+  else if (menuLevel==3) {
+    display.setCursor(0,0);
+    display.println("STEPS/INTERVAL");
+    for (int i=0; i<2; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      if (i==0) {
+        display.print("Value: ");
+        display.println(n_steps);
+      } else {
+        display.println("Back");
+      }
+    }
+  }
+  else if (menuLevel==10) {
+    // continuous
+    display.setCursor(0,0);
+    display.println("CONTINUOUS");
+    for (int i=0; i<3; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      display.println(continuousMenu[i]);
+    }
+  }
+  else if (menuLevel==13) {
+    // speed
+    display.setCursor(0,0);
+    display.println("SPEED");
+    for (int i=0; i<2; i++) {
+      display.setTextColor( i==selectedItem ? SSD1306_BLACK : SSD1306_WHITE,
+                            i==selectedItem ? SSD1306_WHITE : SSD1306_BLACK);
+      display.setCursor(0,16 + i*12);
+      if (i==0) {
+        display.print("Value: ");
+        display.print(speedPercent);
+        display.println("%");
+      } else {
+        display.println("Back");
+      }
+    }
+  }
+}
